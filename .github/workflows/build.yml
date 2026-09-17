@@ -1,0 +1,110 @@
+name: build lantern sdk aar
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: getlantern/lanternsdk-android
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          path: host
+
+      - name: Checkout Lantern SDK
+        uses: actions/checkout@v4
+        with:
+          repository: getlantern/lanternsdk-android
+          path: sdk-src
+          submodules: recursive
+
+      - name: Record what we are building
+        run: |
+          cd sdk-src
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git log -1 --format='upstream commit %H (%ad) %s'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Show toolchain
+        run: |
+          go version
+          java -version 2>&1
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
+          echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME"
+
+      - name: Build the AAR
+        id: build
+        continue-on-error: true
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+          GOFLAGS: -mod=mod
+        run: |
+          set -o pipefail
+          cd sdk-src
+          chmod +x gradlew || true
+          make build-sdk 2>&1 | tee ../build.log
+
+      - name: Collect result
+        id: collect
+        run: |
+          if [ -f sdk-src/build/lanternsdk-android.aar ]; then
+            echo "ok=yes" >> "$GITHUB_OUTPUT"
+            ls -la sdk-src/build/*.aar
+          else
+            echo "ok=no" >> "$GITHUB_OUTPUT"
+            echo "no aar produced"
+          fi
+
+      - name: Publish the AAR
+        if: steps.collect.outputs.ok == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          gh release delete aar-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create aar-latest \
+            sdk-src/build/lanternsdk-android.aar \
+            sdk-src/build/liblantern.aar \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "lanternsdk-android.aar" \
+            --notes "Built from ${UPSTREAM_REPO} ${commit}"
+
+      - name: Push the log where it can be read
+        if: always()
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          tail -c 200000 build.log > log.txt 2>/dev/null || echo "no build log" > log.txt
+          mkdir -p out && mv log.txt out/build-${GITHUB_RUN_NUMBER}.log
+          cd host
+          git config user.name "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git fetch origin ci-logs:ci-logs 2>/dev/null && git checkout ci-logs || git checkout --orphan ci-logs
+          git rm -rq --cached . 2>/dev/null || true
+          rm -rf .github README.md 2>/dev/null || true
+          cp ../out/*.log .
+          git add -A
+          git commit -q -m "run ${GITHUB_RUN_NUMBER}: aar=${{ steps.collect.outputs.ok }}" || exit 0
+          git push -q origin ci-logs
+
+      - name: Fail if no AAR
+        if: steps.collect.outputs.ok != 'yes'
+        run: exit 1
