@@ -87,7 +87,6 @@ jobs:
             gh release delete aar-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || echo "delete skipped"
             gh release create aar-latest \
               sdk-src/build/lanternsdk-android.aar \
-              sdk-src/build/liblantern.aar \
               --repo "$GITHUB_REPOSITORY" \
               --title "lanternsdk-android.aar" \
               --notes "Built from getlantern/lanternsdk-android"
