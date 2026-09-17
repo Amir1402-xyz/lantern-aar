@@ -76,24 +76,31 @@ jobs:
 
       - name: Publish the AAR
         if: steps.collect.outputs.ok == 'yes'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd "$GITHUB_WORKSPACE"
-          gh release delete aar-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create aar-latest \
-            sdk-src/build/lanternsdk-android.aar \
-            sdk-src/build/liblantern.aar \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "lanternsdk-android.aar" \
-            --notes "Built from ${UPSTREAM_REPO} ${commit}"
+          set -x
+          {
+            gh --version
+            gh release delete aar-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || echo "delete skipped"
+            gh release create aar-latest \
+              sdk-src/build/lanternsdk-android.aar \
+              sdk-src/build/liblantern.aar \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "lanternsdk-android.aar" \
+              --notes "Built from getlantern/lanternsdk-android"
+          } 2>&1 | tee publish.log
 
       - name: Push the log where it can be read
         if: always()
         run: |
           cd "$GITHUB_WORKSPACE"
-          tail -c 200000 build.log > log.txt 2>/dev/null || echo "no build log" > log.txt
-          mkdir -p out && mv log.txt out/build-${GITHUB_RUN_NUMBER}.log
+          mkdir -p out
+          tail -c 120000 build.log > out/build-${GITHUB_RUN_NUMBER}.log 2>/dev/null || echo "no build log" > out/build-${GITHUB_RUN_NUMBER}.log
+          tail -c 40000 publish.log > out/publish-${GITHUB_RUN_NUMBER}.log 2>/dev/null || echo "no publish log" > out/publish-${GITHUB_RUN_NUMBER}.log
+          ls -la sdk-src/build >> out/publish-${GITHUB_RUN_NUMBER}.log 2>&1 || true
           cd host
           git config user.name "ci"
           git config user.email "ci@users.noreply.github.com"
